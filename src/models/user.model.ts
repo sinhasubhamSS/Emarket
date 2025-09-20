@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface IUser extends Document {
   whatsappNumber: string;
   name: string;
+  email:string;
   subscriptionStatus: "free" | "paid";
   subscriptionPlan: {
     startDate: Date;
@@ -53,6 +54,7 @@ const UserSchema: Schema<IUser> = new Schema(
   {
     whatsappNumber: { type: String, required: true, unique: true },
     name: { type: String, required: true },
+    email:{type:String,unique:true},
     subscriptionStatus: {
       type: String,
       enum: ["free", "paid"],

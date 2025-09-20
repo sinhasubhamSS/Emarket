@@ -4,69 +4,74 @@ import crypto from "crypto";
 interface RegisterUserData {
   whatsappNumber: string;
   name: string;
-  referredBy?: string; // optional referral code
+  email?: string;
+  referredBy?: string;
   preferredStates?: string[];
   preferredDistricts?: string[];
 }
 
-// Helper to generate random unique referral code
-const generateReferralCode = (): string => {
-  return crypto.randomBytes(3).toString("hex").toUpperCase(); // 6 chars hex uppercase
-};
-
-export const registerUser = async (
-  userData: RegisterUserData
-): Promise<IUser> => {
-  const {
-    whatsappNumber,
-    name,
-    referredBy,
-    preferredStates,
-    preferredDistricts,
-  } = userData;
-
-  // Check if user already exists
-  const existingUser = await User.findOne({ whatsappNumber });
-  if (existingUser) {
-    throw new Error("User with this WhatsApp number already registered");
+export class UserService {
+  // Helper to generate referral code
+  private generateReferralCode(): string {
+    return crypto.randomBytes(3).toString("hex").toUpperCase();
   }
 
-  // Generate unique referral code for new user
-  let referralCode: string = "";
-  let isUnique = false;
-  while (!isUnique) {
-    referralCode = generateReferralCode();
-    const exists = await User.findOne({ referralCode });
-    if (!exists) isUnique = true;
-  }
+  // Register user method
+  public async registerUser(userData: RegisterUserData): Promise<IUser> {
+    const {
+      whatsappNumber,
+      name,
+      email,
+      referredBy,
+      preferredStates,
+      preferredDistricts,
+    } = userData;
 
-  // Prepare new user data
-  const newUserData: Partial<IUser> = {
-    whatsappNumber,
-    name,
-    subscriptionStatus: "free",
-    subscriptionPlan: null,
-    preferredStates: preferredStates ?? ["Jharkhand"],
-    preferredDistricts: preferredDistricts ?? [],
-    referralCode,
-    credits: 0,
-    messagingLogs: [],
-  };
+    const existingUser = await User.findOne({
+      $or: [{ whatsappNumber }, ...(email ? [{ email }] : [])],
+    });
 
-  // Referral credit logic - if valid referredBy code found, add 20 credits to referrer
-  if (referredBy) {
-    const referrer = await User.findOne({ referralCode: referredBy });
-    if (referrer) {
-      referrer.credits += 20; // initial referral bonus
-      await referrer.save();
-      // Store who referred this user
-      newUserData.referredBy = referredBy;
+    if (existingUser) {
+      throw new Error(
+        "User with this WhatsApp number or email already registered"
+      );
     }
+
+    let referralCode: string = "";
+    let isUnique = false;
+    while (!isUnique) {
+      referralCode = this.generateReferralCode();
+      const exists = await User.findOne({ referralCode });
+      if (!exists) isUnique = true;
+    }
+
+    const newUserData: Partial<IUser> = {
+      whatsappNumber,
+      name,
+      email,
+      subscriptionStatus: "free",
+      subscriptionPlan: null,
+      preferredStates: preferredStates ?? ["Jharkhand"],
+      preferredDistricts: preferredDistricts ?? [],
+      referralCode,
+      credits: 0,
+      messagingLogs: [],
+    };
+
+    if (referredBy) {
+      const referrer = await User.findOne({ referralCode: referredBy });
+      if (referrer) {
+        referrer.credits += 20;
+        await referrer.save();
+        newUserData.referredBy = referredBy;
+      }
+    }
+
+    const newUser = new User(newUserData);
+    await newUser.save();
+
+    return newUser;
   }
 
-  // Save new user
-  const newUser = new User(newUserData);
-  await newUser.save();
-
-  return newUser;
-};
+  // Add other user-related methods here (e.g., getUser, updateUser, addCredits, etc.)
+}
