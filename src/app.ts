@@ -4,8 +4,8 @@ const app = express();
 
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("API is running...");
-});
+// Import and use user routes
+import userRoutes from "./routes/userRoutes";
+app.use("/api/user", userRoutes);
 
 export default app;
