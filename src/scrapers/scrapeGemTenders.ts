@@ -1,64 +1,72 @@
 import { chromium } from "playwright";
 
 async function fetchGemTenderData() {
-  const browser = await chromium.launch({ headless: false });
-  const page = await browser.newPage();
+  const browser = await chromium.launch({ headless: false }); // Browser visible
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
-  // Step 1: Go to advance search page
-  await page.goto("https://bidplus.gem.gov.in/advance-search");
+  // Step 1: Open advance-search page
+  await page.goto("https://bidplus.gem.gov.in/advance-search", {
+    waitUntil: "domcontentloaded",
+  });
 
-  // Step 2: Wait for state-list-adv API response to get states
-  const stateListResponse = await page.waitForResponse(
-    (response) =>
-      response.url().includes("/state-list-adv") && response.status() === 200
+  // Step 2: Get CSRF token from cookies
+  const cookies = await context.cookies();
+  const csrfCookie = cookies.find((c) => c.name.includes("csrf"));
+  if (!csrfCookie) throw new Error("CSRF token not found!");
+  const csrfToken = csrfCookie.value;
+  console.log("✅ CSRF Token:", csrfToken);
+
+  // Step 3: Prepare payload for tender search
+  const payloadObj = {
+    searchType: "con",
+    state_name_con: "JHARKHAND",
+    city_name_con: "",
+    bidEndFromCon: "",
+    bidEndToCon: "",
+    page: 1,
+  };
+
+  const payloadStr = JSON.stringify(payloadObj);
+
+  // Step 4: POST request to search-bids API
+  const tenderResp = await page.request.post(
+    "https://bidplus.gem.gov.in/search-bids",
+    {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      form: {
+        payload: payloadStr,       // payload as string
+        csrf_bd_gem_nk: csrfToken, // CSRF token
+      },
+    }
   );
-  const statesData = await stateListResponse.json();
 
-  console.log("States List:", statesData);
+  console.log("📌 Tender API Status:", tenderResp.status());
 
-  // Step 3: Find Jharkhand entry in states list
-  const selectedState =
-    statesData.find(
-      (s: any) =>
-        s.state_name?.toUpperCase() === "JHARKHAND" ||
-        s.state_name_con?.toUpperCase() === "JHARKHAND"
-    ) || {};
+  const text = await tenderResp.text();
+  console.log("🔎 Raw Response (first 300 chars):", text.slice(0, 300));
 
-  // Step 4: Select "Search by Consignee" option/tab
-  // Replace '#search-by-consignee' with correct selector if needed
-  await page.click("#search-by-consignee");
+  // Step 5: Parse response JSON
+  let tenderData: any;
+  try {
+    tenderData = JSON.parse(text);
+  } catch {
+    throw new Error("❌ Server returned HTML instead of JSON. Check CSRF/cookies.");
+  }
 
-  // Step 5: Select Jharkhand in state dropdown
-  // Adjust selector if needed based on element inspection
-  await page.selectOption(
-    'select[name="state_name_con"]',
-    selectedState.state_name_con || "JHARKHAND"
-  );
+  const tenders = tenderData.response?.response?.docs || [];
+  console.log("✅ Total Tenders Fetched:", tenders.length);
 
-  // Step 6: Leave district blank (optional)
-  await page.selectOption('select[name="city_name_con"]', "");
-
-  // Step 7: Wait for tender data response triggered by search
-  const tenderResponsePromise = page.waitForResponse(
-    (response) =>
-      response.url().includes("/search-bids") && response.status() === 200
-  );
-
-  // Step 8: Click the search button
-  // Adjust 'button#searchButton' selector if necessary based on actual page
-  await Promise.all([tenderResponsePromise, page.click("button#searchButton")]);
-
-  // Step 9: Extract tender data JSON
-  const tenderResponse = await tenderResponsePromise;
-  const tenderData = await tenderResponse.json();
-
-  console.log("Tender Data:", JSON.stringify(tenderData, null, 2));
-
-  // TODO: Add logic here to save tenderData into MongoDB using your tender.ts model
+  if (tenders.length > 0) {
+    console.log("📌 Sample Tender:", JSON.stringify(tenders[0], null, 2));
+  }
 
   await browser.close();
 }
 
 fetchGemTenderData().catch((error) => {
-  console.error("Error in scraping GeM tenders:", error);
+  console.error("❌ Error scraping GeM tenders:", error);
 });
