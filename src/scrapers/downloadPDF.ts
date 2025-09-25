@@ -1,13 +1,16 @@
 import fs from "fs";
 import path from "path";
 import axios from "axios";
+import { extractPDFText } from "./extractPDF";
 
 export async function downloadPDF(tenderId: number) {
   try {
     const pdfUrl = `https://bidplus.gem.gov.in/showbidDocument/${tenderId}`;
     const downloadDir = path.resolve(__dirname, "../../downloads");
 
-    if (!fs.existsSync(downloadDir)) fs.mkdirSync(downloadDir, { recursive: true });
+    if (!fs.existsSync(downloadDir)) {
+      fs.mkdirSync(downloadDir, { recursive: true });
+    }
 
     const filePath = path.join(downloadDir, `${tenderId}.pdf`);
     console.log(`📥 Downloading PDF for Tender ID: ${tenderId} from URL: ${pdfUrl}`);
@@ -16,6 +19,12 @@ export async function downloadPDF(tenderId: number) {
     fs.writeFileSync(filePath, response.data);
 
     console.log(`✅ PDF Saved: ${filePath}`);
+
+    // ✅ Extract text after saving
+    const extractedText = await extractPDFText(filePath);
+    console.log(`📑 Tender ID ${tenderId} Extracted Text Length: ${extractedText.length}`);
+
+    return extractedText;
   } catch (error) {
     console.error(`❌ Error downloading PDF for Tender ID: ${tenderId}`, error);
   }
