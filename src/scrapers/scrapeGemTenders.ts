@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import { downloadPDF } from "./downloadPDF";
 
 async function fetchGemTenderData() {
-  const browser = await chromium.launch({ headless: true }); // headless mode
+  const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
@@ -61,14 +61,23 @@ async function fetchGemTenderData() {
     return;
   }
 
-  // Iterate tenders and download + extract PDFs
-  for (const tender of tenders) {
+  // Limit processing to first 2 tenders
+  const maxTendersToProcess = 2;
+  for (let i = 0; i < Math.min(tenders.length, maxTendersToProcess); i++) {
+    const tender = tenders[i];
     const tenderId = tender.id;
     const bidNumber = tender.b_bid_number[0];
     console.log(`\n📥 Processing Tender: ${bidNumber} (ID: ${tenderId})`);
 
-    const text = await downloadPDF(tenderId);
-    console.log(`📌 Extracted snippet for ${bidNumber}:`, text?.slice(0, 200));
+    const result = await downloadPDF(tenderId);
+    if (result) {
+      const { extractedText, extractedFields } = result;
+      console.log(
+        `📌 Extracted snippet for ${bidNumber}:`,
+        extractedText.slice(0, 200)
+      );
+      console.log(`🗂️ Extracted Fields for ${bidNumber}:`, extractedFields);
+    }
   }
 
   await browser.close();
