@@ -1,15 +1,32 @@
-import { chromium } from "playwright";
+import { chromium, Page } from "playwright";
 import { downloadPDF } from "./downloadPDF";
+
+// 🔁 Safe Goto with retry
+async function safeGoto(page: Page, url: string, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: 60000,
+      });
+      return;
+    } catch (err) {
+      console.warn(`⚠️ Navigation failed (attempt ${i + 1}) → Retrying...`);
+      if (i === retries - 1) throw err;
+    }
+  }
+}
 
 async function fetchGemTenderData() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  page.setDefaultTimeout(60000);
+  page.setDefaultNavigationTimeout(60000);
+
   console.log("🌐 Opening GeM Advance Search Page...");
-  await page.goto("https://bidplus.gem.gov.in/advance-search", {
-    waitUntil: "domcontentloaded",
-  });
+  await safeGoto(page, "https://bidplus.gem.gov.in/advance-search");
 
   // CSRF token from cookies
   const cookies = await context.cookies();
@@ -58,16 +75,34 @@ async function fetchGemTenderData() {
 
   if (tenders.length === 0) {
     console.log("⚠️ No tenders found!");
+    await browser.close();
     return;
   }
 
-  // Limit processing to first 2 tenders
-  const maxTendersToProcess = 2;
-  for (let i = 0; i < Math.min(tenders.length, maxTendersToProcess); i++) {
-    const tender = tenders[i];
+  // Filter only product tenders (skip services)
+  const onlyProductTenders = tenders.filter((t: any) => {
+    if (!Array.isArray(t.b_cat_id)) {
+      console.warn("Skipping tender due to missing b_cat_id array:", t.id);
+      return false;
+    }
+    const catId = t.b_cat_id[0];
+    if (typeof catId !== "string") {
+      console.warn("Skipping tender due to non-string b_cat_id:", t.id, catId);
+      return false;
+    }
+
+    const isService = catId.toLowerCase().startsWith("services_");
+    console.log(`Tender ${t.id} category check: ${catId} -> isService=${isService}`);
+
+    return !isService; // Keep only if NOT service
+  });
+
+  console.log(`✅ Product Tenders Count: ${onlyProductTenders.length}`);
+
+  for (const tender of onlyProductTenders) {
     const tenderId = tender.id;
     const bidNumber = tender.b_bid_number[0];
-    console.log(`\n📥 Processing Tender: ${bidNumber} (ID: ${tenderId})`);
+    console.log(`\n📥 Processing Product Tender: ${bidNumber} (ID: ${tenderId})`);
 
     const result = await downloadPDF(tenderId);
     if (result) {
