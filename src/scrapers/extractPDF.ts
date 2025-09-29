@@ -36,81 +36,49 @@ export async function extractPDFText(filePath: string): Promise<string> {
   return text;
 }
 
-// -------------------------------
-// Step 2: Extract Relevant Fields
-// -------------------------------
-// -------------------------------
+
 // Step 2: Extract Relevant Fields
 // -------------------------------
 export function extractRelevantFields(rawText: string) {
   const cleanedText = rawText.replace(/[^\x00-\x7F]+/g, " ");
 
-  // Core fields extraction (unchanged)
+  // Core fields extraction
   const bidNumberMatch = cleanedText.match(
     /Bid\s*Number[:\-]?\s*(GEM\/\d{4}\/B\/\d+)/i
   );
-  const startDateMatch = cleanedText.match(
-    /Dated[:\-]?\s*(\d{2}-\d{2}-\d{4})/i
-  );
+  const startDateMatch = cleanedText.match(/Dated[:\-]?\s*(\d{2}-\d{2}-\d{4})/i);
   const endDateMatch = cleanedText.match(
     /Bid\s*End\s*Date\/Time\s*(\d{2}-\d{2}-\d{4}\s*\d{2}:\d{2}:\d{2})/i
   );
   const itemCategoryMatch = cleanedText.match(
     /Item\s*Category\s*[:\-]?\s*([\s\S]*?)(?=GeMARPTS|Document|required|$)/i
   );
+
   const documentReqMatch = cleanedText.match(
     /Document\s*required\s*from\s*seller\s*[:\-]?\s*([\s\S]*?)(?=In case|Consignee|$)/i
   );
 
-  // -------------------------------
-  // Consignee Block Extraction improved for table rows
-  // -------------------------------
-  const consigneeRegex =
-    /Consignees?[\s\S]*?Address\s*([\s\S]*?)(?=(Number of Resources|Quantity|Delivery|Additional Requirement|Buyer Added|$))/gi;
+  // ✅ Extract consignee blocks (Address only)
+  const consigneeBlockRegex =
+    /Consignees?[\s\S]*?(?=(?:Technical Specifications|Buyer Added|Scope of Supply|Disclaimer|$))/gi;
+  const consigneeBlocks = cleanedText.match(consigneeBlockRegex) || [];
 
-  let consigneeAddressesRaw = "";
-  let match;
-  while ((match = consigneeRegex.exec(cleanedText)) !== null) {
-    consigneeAddressesRaw += match[1] + "\n";
-  }
-
-  // Split raw consignee text into lines, extract rows starting with number
-  const lines = consigneeAddressesRaw.split(/\r?\n/).map(l => l.trim()).filter(l => l);
-
-  const consigneeAddresses: string[] = [];
-  let currentAddress = "";
-
-  for (const line of lines) {
-    // Check if line starts with number (S.No)
-    if (/^\d+/.test(line)) {
-      // Save previous address if exists
-      if (currentAddress) {
-        consigneeAddresses.push(currentAddress.trim());
+  const extractedConsignees: string[] = [];
+  for (const block of consigneeBlocks) {
+    // Each consignee entry generally has "Name + Address + Pin code"
+    const addressRegex =
+      /\d{6},\s*[\s\S]*?(?=(?:\d+\s+\d+|Delivery|Quantity|$))/g;
+    const matches = block.match(addressRegex);
+    if (matches) {
+      for (const m of matches) {
+        extractedConsignees.push(m.replace(/\s+/g, " ").trim());
       }
-      // Start new address line, remove leading number
-      currentAddress = line.replace(/^\d+\s*/, "");
-    } else {
-      // Line continuation: append with space (in case multiline address)
-      currentAddress += " " + line;
     }
   }
-  // Push last accumulated address
-  if (currentAddress) {
-    consigneeAddresses.push(currentAddress.trim());
-  }
 
-  // Clean unwanted wage/bonus if present
-  const cleanedConsigneeAddresses = consigneeAddresses.map(addr => {
-    let cleaned = addr;
-    cleaned = cleaned.split("Minimum daily wage")[0];
-    cleaned = cleaned.split("Bonus (INR")[0];
-    cleaned = cleaned.split("EPF")[0];
-    return cleaned.trim();
-  }).filter(Boolean);
+  console.log("📄 Total Consignee Addresses Extracted:", extractedConsignees.length);
 
-  // -------------------------------
-  // Final structured object
-  // -------------------------------
+  // Final extracted object
   const extracted = {
     bidNumber: bidNumberMatch ? bidNumberMatch[1].trim() : null,
     startDate: startDateMatch ? startDateMatch[1] : null,
@@ -121,12 +89,10 @@ export function extractRelevantFields(rawText: string) {
     documentsRequired: documentReqMatch
       ? documentReqMatch[1].replace(/\s+/g, " ").trim()
       : null,
-    consignees:
-      cleanedConsigneeAddresses.length > 0
-        ? cleanedConsigneeAddresses
-        : null,
+    consignees: extractedConsignees.length > 0 ? extractedConsignees : null,
   };
 
   console.log("🗂️ Extracted Fields:", extracted);
   return extracted;
 }
+
