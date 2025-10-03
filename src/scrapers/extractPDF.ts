@@ -3,7 +3,9 @@ import pdfParse from "pdf-parse";
 import { fromPath } from "pdf2pic";
 import Tesseract from "tesseract.js";
 
-// Extract text (first try pdf-parse, then OCR fallback)
+// -------------------------------
+// Step 1: Extract text (pdf-parse + OCR fallback)
+// -------------------------------
 export async function extractPDFText(filePath: string): Promise<string> {
   const dataBuffer = fs.readFileSync(filePath);
   const pdfData = await pdfParse(dataBuffer);
@@ -36,7 +38,7 @@ export async function extractPDFText(filePath: string): Promise<string> {
   return text;
 }
 
-
+// -------------------------------
 // Step 2: Extract Relevant Fields
 // -------------------------------
 export function extractRelevantFields(rawText: string) {
@@ -46,7 +48,9 @@ export function extractRelevantFields(rawText: string) {
   const bidNumberMatch = cleanedText.match(
     /Bid\s*Number[:\-]?\s*(GEM\/\d{4}\/B\/\d+)/i
   );
-  const startDateMatch = cleanedText.match(/Dated[:\-]?\s*(\d{2}-\d{2}-\d{4})/i);
+  const startDateMatch = cleanedText.match(
+    /Dated[:\-]?\s*(\d{2}-\d{2}-\d{4})/i
+  );
   const endDateMatch = cleanedText.match(
     /Bid\s*End\s*Date\/Time\s*(\d{2}-\d{2}-\d{4}\s*\d{2}:\d{2}:\d{2})/i
   );
@@ -63,9 +67,9 @@ export function extractRelevantFields(rawText: string) {
     /Consignees?[\s\S]*?(?=(?:Technical Specifications|Buyer Added|Scope of Supply|Disclaimer|$))/gi;
   const consigneeBlocks = cleanedText.match(consigneeBlockRegex) || [];
 
-  const extractedConsignees: string[] = [];
+  let extractedConsignees: string[] = [];
   for (const block of consigneeBlocks) {
-    // Each consignee entry generally has "Name + Address + Pin code"
+    // Each consignee entry generally has "PINCODE + Address"
     const addressRegex =
       /\d{6},\s*[\s\S]*?(?=(?:\d+\s+\d+|Delivery|Quantity|$))/g;
     const matches = block.match(addressRegex);
@@ -76,7 +80,15 @@ export function extractRelevantFields(rawText: string) {
     }
   }
 
-  console.log("📄 Total Consignee Addresses Extracted:", extractedConsignees.length);
+  // ✅ Remove duplicates
+  const uniqueConsignees = Array.from(
+    new Set(extractedConsignees.map((addr) => addr.replace(/\s+/g, " ").trim()))
+  );
+
+  console.log(
+    "📄 Total Consignee Addresses Extracted:",
+    uniqueConsignees.length
+  );
 
   // Final extracted object
   const extracted = {
@@ -89,10 +101,10 @@ export function extractRelevantFields(rawText: string) {
     documentsRequired: documentReqMatch
       ? documentReqMatch[1].replace(/\s+/g, " ").trim()
       : null,
-    consignees: extractedConsignees.length > 0 ? extractedConsignees : null,
+    consignees: uniqueConsignees.length > 0 ? uniqueConsignees : null,
   };
 
   console.log("🗂️ Extracted Fields:", extracted);
+  
   return extracted;
 }
-
