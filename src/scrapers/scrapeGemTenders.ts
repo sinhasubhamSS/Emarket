@@ -92,7 +92,9 @@ async function fetchGemTenderData() {
     }
 
     const isService = catId.toLowerCase().startsWith("services_");
-    console.log(`Tender ${t.id} category check: ${catId} -> isService=${isService}`);
+    console.log(
+      `Tender ${t.id} category check: ${catId} -> isService=${isService}`
+    );
 
     return !isService; // Keep only if NOT service
   });
@@ -101,10 +103,13 @@ async function fetchGemTenderData() {
 
   for (const tender of onlyProductTenders) {
     const tenderId = tender.id;
-    const bidNumber = tender.b_bid_number[0];
-    console.log(`\n📥 Processing Product Tender: ${bidNumber} (ID: ${tenderId})`);
+    const bidNumber = tender.b_bid_number[0]; // Already given by API ✅
 
-    const result = await downloadPDF(tenderId);
+    console.log(
+      `\n📥 Processing Product Tender: ${bidNumber} (ID: ${tenderId})`
+    );
+
+    const result = await downloadPDF(tenderId, bidNumber); // Pass bidNumber too
     if (result) {
       const { extractedText, extractedFields } = result;
       console.log(
