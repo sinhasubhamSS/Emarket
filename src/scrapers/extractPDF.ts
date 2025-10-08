@@ -137,7 +137,7 @@ export function extractRelevantFields(
       : null,
     documentsRequired: documentReqMatch
       ? documentReqMatch[1].replace(/\s+/g, " ").trim()
-      : null,
+      : "download full pdf",
     consignees: uniqueConsignees.length > 0 ? uniqueConsignees : null,
     pdfdownload: pdfUrl,
   };
