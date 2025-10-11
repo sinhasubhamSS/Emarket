@@ -50,7 +50,7 @@ function cleanConsigneeAddress(addr: string): string {
       .replace(/\s+/g, " ") // collapse multiple spaces
       .trim()
       // optional: if you want to cut off after a known phrase, e.g. “Post Chirkunda”
-      .replace(/(Post Chirkunda).*/i, "Post Chirkunda")
+      .replace(/(Post ).*/i, "Post ")
   );
 }
 

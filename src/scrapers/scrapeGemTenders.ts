@@ -1,14 +1,13 @@
 import { chromium, Page } from "playwright";
 import { downloadPDF } from "./downloadPDF";
+import connectDB from "../config/db";
+import { saveTender } from "../services/tenderService";
 
-// 🔁 Safe Goto with retry
+// Safe page.goto with retries
 async function safeGoto(page: Page, url: string, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
-      await page.goto(url, {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
-      });
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
       return;
     } catch (err) {
       console.warn(`⚠️ Navigation failed (attempt ${i + 1}) → Retrying...`);
@@ -18,6 +17,8 @@ async function safeGoto(page: Page, url: string, retries = 3) {
 }
 
 async function fetchGemTenderData() {
+  await connectDB();
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -28,14 +29,12 @@ async function fetchGemTenderData() {
   console.log("🌐 Opening GeM Advance Search Page...");
   await safeGoto(page, "https://bidplus.gem.gov.in/advance-search");
 
-  // CSRF token from cookies
   const cookies = await context.cookies();
   const csrfCookie = cookies.find((c) => c.name.includes("csrf"));
   if (!csrfCookie) throw new Error("CSRF token not found!");
   const csrfToken = csrfCookie.value;
   console.log("✅ CSRF Token:", csrfToken);
 
-  // Prepare payload
   const payloadObj = {
     searchType: "con",
     state_name_con: "JHARKHAND",
@@ -90,33 +89,50 @@ async function fetchGemTenderData() {
       console.warn("Skipping tender due to non-string b_cat_id:", t.id, catId);
       return false;
     }
-
     const isService = catId.toLowerCase().startsWith("services_");
     console.log(
       `Tender ${t.id} category check: ${catId} -> isService=${isService}`
     );
-
-    return !isService; // Keep only if NOT service
+    return !isService;
   });
 
   console.log(`✅ Product Tenders Count: ${onlyProductTenders.length}`);
 
   for (const tender of onlyProductTenders) {
     const tenderId = tender.id;
-    const bidNumber = tender.b_bid_number[0]; // Already given by API ✅
+    const bidNumber = tender.b_bid_number[0];
 
     console.log(
       `\n📥 Processing Product Tender: ${bidNumber} (ID: ${tenderId})`
     );
 
-    const result = await downloadPDF(tenderId, bidNumber); // Pass bidNumber too
+    const result = await downloadPDF(tenderId, bidNumber);
     if (result) {
       const { extractedText, extractedFields } = result;
+
       console.log(
         `📌 Extracted snippet for ${bidNumber}:`,
         extractedText.slice(0, 200)
       );
       console.log(`🗂️ Extracted Fields for ${bidNumber}:`, extractedFields);
+
+      await saveTender({
+        tenderNo: extractedFields.bidNumber ?? undefined,
+        category: extractedFields.itemCategory ?? undefined,
+        startDate: extractedFields.startDate
+          ? new Date(extractedFields.startDate)
+          : undefined,
+        endDate: extractedFields.endDate
+          ? new Date(extractedFields.endDate)
+          : undefined,
+        documentsRequired: extractedFields.documentsRequired
+          ? [extractedFields.documentsRequired]
+          : [],
+        documentDownloadLinks: [extractedFields.pdfdownload],
+        consignees: extractedFields.consignees || [],
+      });
+
+      console.log(`✅ Tender ${bidNumber} saved to database`);
     }
   }
 
@@ -127,3 +143,4 @@ async function fetchGemTenderData() {
 fetchGemTenderData().catch((error) =>
   console.error("❌ Error scraping GeM tenders:", error)
 );
+export { fetchGemTenderData };
