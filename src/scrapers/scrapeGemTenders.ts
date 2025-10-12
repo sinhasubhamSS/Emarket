@@ -3,6 +3,19 @@ import { downloadPDF } from "./downloadPDF";
 import connectDB from "../config/db";
 import { saveTender } from "../services/tenderService";
 
+// Custom date parser for dd-mm-yyyy and dd-mm-yyyy hh:mm:ss formats
+function parseTenderDate(dateStr?: string): Date | undefined {
+  if (!dateStr) return undefined;
+  const match = dateStr.match(
+    /^(\d{2})-(\d{2})-(\d{4})(?: (\d{2}):(\d{2}):(\d{2}))?$/
+  );
+  if (!match) return undefined;
+  const [, dd, mm, yyyy, hh = "00", min = "00", ss = "00"] = match;
+  const isoString = `${yyyy}-${mm}-${dd}T${hh}:${min}:${ss}`;
+  const dateObj = new Date(isoString);
+  return isNaN(dateObj.getTime()) ? undefined : dateObj;
+}
+
 // Safe page.goto with retries
 async function safeGoto(page: Page, url: string, retries = 3) {
   for (let i = 0; i < retries; i++) {
@@ -115,16 +128,16 @@ async function fetchGemTenderData() {
         extractedText.slice(0, 200)
       );
       console.log(`🗂️ Extracted Fields for ${bidNumber}:`, extractedFields);
+      console.log("Debug Dates:", {
+        startDateRaw: extractedFields.startDate,
+        endDateRaw: extractedFields.endDate,
+      });
 
       await saveTender({
         tenderNo: extractedFields.bidNumber ?? undefined,
         category: extractedFields.itemCategory ?? undefined,
-        startDate: extractedFields.startDate
-          ? new Date(extractedFields.startDate)
-          : undefined,
-        endDate: extractedFields.endDate
-          ? new Date(extractedFields.endDate)
-          : undefined,
+        startDate: parseTenderDate(extractedFields.startDate ?? undefined),
+        endDate: parseTenderDate(extractedFields.endDate ?? undefined),
         documentsRequired: extractedFields.documentsRequired
           ? [extractedFields.documentsRequired]
           : [],
