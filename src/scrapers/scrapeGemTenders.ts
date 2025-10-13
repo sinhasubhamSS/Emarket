@@ -3,7 +3,19 @@ import { downloadPDF } from "./downloadPDF";
 import connectDB from "../config/db";
 import { saveTender } from "../services/tenderService";
 
-// Custom date parser for dd-mm-yyyy and dd-mm-yyyy hh:mm:ss formats
+// Helper: Is ISO date string today?
+function isTodayISO(isoDate?: string): boolean {
+  if (!isoDate) return false;
+  const d = new Date(isoDate);
+  const today = new Date();
+  return (
+    d.getDate() === today.getDate() &&
+    d.getMonth() === today.getMonth() &&
+    d.getFullYear() === today.getFullYear()
+  );
+}
+
+// Helper: parseTenderDate for dd-mm-yyyy and dd-mm-yyyy hh:mm:ss
 function parseTenderDate(dateStr?: string): Date | undefined {
   if (!dateStr) return undefined;
   const match = dateStr.match(
@@ -48,70 +60,88 @@ async function fetchGemTenderData() {
   const csrfToken = csrfCookie.value;
   console.log("✅ CSRF Token:", csrfToken);
 
-  const payloadObj = {
-    searchType: "con",
-    state_name_con: "JHARKHAND",
-    city_name_con: "",
-    bidEndFromCon: "",
-    bidEndToCon: "",
-    page: 1,
-  };
-  const payloadStr = JSON.stringify(payloadObj);
+  let allTenders: any[] = [];
+  let currentPage = 0;
+  const pageSize = 10;
+  let fetched = 0;
+  let totalToFetch = 0;
 
-  console.log("🔍 Fetching tenders from API...");
-  const tenderResp = await page.request.post(
-    "https://bidplus.gem.gov.in/search-bids",
-    {
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "X-Requested-With": "XMLHttpRequest",
-      },
-      form: { payload: payloadStr, csrf_bd_gem_nk: csrfToken },
-    }
-  );
+  while (true) {
+    const payloadObj = {
+      searchType: "con",
+      state_name_con: "JHARKHAND",
+      city_name_con: "Ranchi",
+      bidEndFromCon: "",
+      bidEndToCon: "",
+      page: currentPage + 1, // API is 1-based index for "page"
+    };
+    const payloadStr = JSON.stringify(payloadObj);
 
-  console.log("📌 Tender API Status:", tenderResp.status());
-  const text = await tenderResp.text();
-
-  let tenderData: any;
-  try {
-    tenderData = JSON.parse(text);
-  } catch {
-    throw new Error(
-      "❌ Server returned HTML instead of JSON. Check CSRF/cookies."
+    console.log(`🔍 Fetching page ${currentPage + 1} from API...`);
+    const tenderResp = await page.request.post(
+      "https://bidplus.gem.gov.in/search-bids",
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        form: { payload: payloadStr, csrf_bd_gem_nk: csrfToken },
+      }
     );
+
+    console.log("📌 Tender API Status:", tenderResp.status());
+    const text = await tenderResp.text();
+    let tenderData: any;
+    try {
+      tenderData = JSON.parse(text);
+    } catch {
+      throw new Error(
+        "❌ Server returned HTML instead of JSON. Check CSRF/cookies."
+      );
+    }
+
+    if (currentPage === 0) {
+      totalToFetch = tenderData.response?.response?.numFound || 0;
+      console.log(`📦 Total tenders to fetch: ${totalToFetch}`);
+    }
+
+    const docs = tenderData.response?.response?.docs || [];
+    fetched += docs.length;
+    console.log(
+      `✔️ Fetched ${docs.length} this page | Total so far: ${fetched}`
+    );
+    allTenders.push(...docs);
+
+    if (fetched >= totalToFetch || docs.length === 0) break;
+    currentPage += 1;
   }
 
-  const tenders = tenderData.response?.response?.docs || [];
-  console.log(`✅ Total Tenders Fetched: ${tenders.length}`);
-
-  if (tenders.length === 0) {
-    console.log("⚠️ No tenders found!");
+  console.log(`✅ Total tenders fetched (all pages): ${allTenders.length}`);
+  if (!allTenders.length) {
+    console.log("⚠️ No tenders found after pagination!");
     await browser.close();
     return;
   }
 
-  // Filter only product tenders (skip services)
-  const onlyProductTenders = tenders.filter((t: any) => {
-    if (!Array.isArray(t.b_cat_id)) {
-      console.warn("Skipping tender due to missing b_cat_id array:", t.id);
-      return false;
-    }
+  // Product tenders + Only today's using final_start_date_sort[0]
+  const onlyTodayProductTenders = allTenders.filter((t: any) => {
+    if (!Array.isArray(t.b_cat_id)) return false;
     const catId = t.b_cat_id[0];
-    if (typeof catId !== "string") {
-      console.warn("Skipping tender due to non-string b_cat_id:", t.id, catId);
-      return false;
-    }
-    const isService = catId.toLowerCase().startsWith("services_");
-    console.log(
-      `Tender ${t.id} category check: ${catId} -> isService=${isService}`
-    );
-    return !isService;
+    if (typeof catId !== "string") return false;
+    if (catId.toLowerCase().startsWith("services_")) return false;
+    // Today's check with ISO start field
+    return isTodayISO(t.final_start_date_sort?.[0]);
   });
 
-  console.log(`✅ Product Tenders Count: ${onlyProductTenders.length}`);
+  console.log(
+    `✅ Today's Product Tenders Count: ${onlyTodayProductTenders.length}`
+  );
+  console.log("Today's Product Tenders (Raw API Data):");
+  onlyTodayProductTenders.forEach((tender, idx) => {
+    console.log(`[${idx + 1}]`, JSON.stringify(tender, null, 2));
+  });
 
-  for (const tender of onlyProductTenders) {
+  for (const tender of onlyTodayProductTenders) {
     const tenderId = tender.id;
     const bidNumber = tender.b_bid_number[0];
 
@@ -128,10 +158,6 @@ async function fetchGemTenderData() {
         extractedText.slice(0, 200)
       );
       console.log(`🗂️ Extracted Fields for ${bidNumber}:`, extractedFields);
-      console.log("Debug Dates:", {
-        startDateRaw: extractedFields.startDate,
-        endDateRaw: extractedFields.endDate,
-      });
 
       await saveTender({
         tenderNo: extractedFields.bidNumber ?? undefined,
@@ -156,4 +182,5 @@ async function fetchGemTenderData() {
 fetchGemTenderData().catch((error) =>
   console.error("❌ Error scraping GeM tenders:", error)
 );
+
 export { fetchGemTenderData };
