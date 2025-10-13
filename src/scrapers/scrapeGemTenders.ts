@@ -3,19 +3,14 @@ import { downloadPDF } from "./downloadPDF";
 import connectDB from "../config/db";
 import { saveTender } from "../services/tenderService";
 
-// Helper: Is ISO date string today?
-function isTodayISO(isoDate?: string): boolean {
-  if (!isoDate) return false;
-  const d = new Date(isoDate);
-  const today = new Date();
-  return (
-    d.getDate() === today.getDate() &&
-    d.getMonth() === today.getMonth() &&
-    d.getFullYear() === today.getFullYear()
-  );
+// Converts final_start_date_sort to YYYY-MM-DD
+function getDateString(isoString?: string): string | undefined {
+  if (!isoString) return undefined;
+  const d = new Date(isoString);
+  // Get local date part: yyyy-mm-dd
+  return d.toISOString().substring(0, 10);
 }
 
-// Helper: parseTenderDate for dd-mm-yyyy and dd-mm-yyyy hh:mm:ss
 function parseTenderDate(dateStr?: string): Date | undefined {
   if (!dateStr) return undefined;
   const match = dateStr.match(
@@ -28,7 +23,6 @@ function parseTenderDate(dateStr?: string): Date | undefined {
   return isNaN(dateObj.getTime()) ? undefined : dateObj;
 }
 
-// Safe page.goto with retries
 async function safeGoto(page: Page, url: string, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -62,7 +56,6 @@ async function fetchGemTenderData() {
 
   let allTenders: any[] = [];
   let currentPage = 0;
-  const pageSize = 10;
   let fetched = 0;
   let totalToFetch = 0;
 
@@ -73,7 +66,7 @@ async function fetchGemTenderData() {
       city_name_con: "Ranchi",
       bidEndFromCon: "",
       bidEndToCon: "",
-      page: currentPage + 1, // API is 1-based index for "page"
+      page: currentPage + 1,
     };
     const payloadStr = JSON.stringify(payloadObj);
 
@@ -123,25 +116,29 @@ async function fetchGemTenderData() {
     return;
   }
 
-  // Product tenders + Only today's using final_start_date_sort[0]
+  // Local date (yyyy-mm-dd) for strict filtering
+  const todayDateStr = new Date().toISOString().substring(0, 10);
+
+  // Product tenders on today's date only - using formatted string
   const onlyTodayProductTenders = allTenders.filter((t: any) => {
     if (!Array.isArray(t.b_cat_id)) return false;
     const catId = t.b_cat_id[0];
     if (typeof catId !== "string") return false;
     if (catId.toLowerCase().startsWith("services_")) return false;
-    // Today's check with ISO start field
-    return isTodayISO(t.final_start_date_sort?.[0]);
+    const tenderDateStr = getDateString(t.final_start_date_sort?.[0]);
+    return tenderDateStr === todayDateStr;
   });
 
-  console.log(
-    `✅ Today's Product Tenders Count: ${onlyTodayProductTenders.length}`
+  const uniqTodayTenders = Array.from(
+    new Map(onlyTodayProductTenders.map((t) => [t.id, t])).values()
   );
-  console.log("Today's Product Tenders (Raw API Data):");
-  onlyTodayProductTenders.forEach((tender, idx) => {
-    console.log(`[${idx + 1}]`, JSON.stringify(tender, null, 2));
+
+  console.log(`✅ Unique Today's Product Tenders: ${uniqTodayTenders.length}`);
+  uniqTodayTenders.forEach((t, idx) => {
+    console.log(`[${idx + 1}]`, JSON.stringify(t, null, 2));
   });
 
-  for (const tender of onlyTodayProductTenders) {
+  for (const tender of uniqTodayTenders) {
     const tenderId = tender.id;
     const bidNumber = tender.b_bid_number[0];
 
@@ -152,7 +149,6 @@ async function fetchGemTenderData() {
     const result = await downloadPDF(tenderId, bidNumber);
     if (result) {
       const { extractedText, extractedFields } = result;
-
       console.log(
         `📌 Extracted snippet for ${bidNumber}:`,
         extractedText.slice(0, 200)
