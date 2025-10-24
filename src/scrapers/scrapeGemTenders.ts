@@ -54,7 +54,8 @@ function logTenderIds(tenderIds: string[], dateStr: string) {
   console.log(`📝 Logged ${tenderIds.length} tender IDs to ${TENDER_LOG_DIR}/${dateStr}.json`);
 }
 
-async function fetchGemTenderData_Internal(): Promise<Record<string, any>[]> {
+// Core fetch to collect all tenders
+async function fetchGemTenderData_Internal(targetDate: string): Promise<Record<string, any>[]> {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -62,24 +63,22 @@ async function fetchGemTenderData_Internal(): Promise<Record<string, any>[]> {
   page.setDefaultNavigationTimeout(60000);
 
   await safeGoto(page, "https://bidplus.gem.gov.in/advance-search");
+
   const cookies = await context.cookies();
   const csrfCookie = cookies.find((c) => c.name.includes("csrf"));
   if (!csrfCookie) throw new Error("CSRF token not found!");
   const csrfToken = csrfCookie.value;
 
   let allTenders: Record<string, any>[] = [];
-  let fetchedTenderIDs = new Set<string>();
+  const fetchedTenderIDs = new Set<string>();
   let currentPage = 0;
   let totalToFetch = 0;
-  const todayDateStr = new Date().toISOString().substring(0, 10);
 
   while (true) {
     const payloadObj = {
       searchType: "con",
       state_name_con: "JHARKHAND",
-      city_name_con: "",
-      bidEndFromCon: "",
-      bidEndToCon: "",
+      city_name_con: "Ranchi",
       page: currentPage + 1,
     };
     const payloadStr = JSON.stringify(payloadObj);
@@ -102,7 +101,7 @@ async function fetchGemTenderData_Internal(): Promise<Record<string, any>[]> {
       } catch (err) {
         if (attempt === maxRetries) throw err;
         console.warn(`⚠️ API fetch failed (attempt ${attempt + 1}), retrying after delay...`);
-        await new Promise(res => setTimeout(res, 1000)); // 1 second delay before retry
+        await new Promise(res => setTimeout(res, 1200));
       }
     }
     if (!tenderResp) throw new Error("Failed to fetch tender data after retries.");
@@ -122,63 +121,64 @@ async function fetchGemTenderData_Internal(): Promise<Record<string, any>[]> {
     }
 
     const docs: Record<string, any>[] = tenderData.response?.response?.docs || [];
+
+    // Log all tenders (for full debug visibility)
+    console.log(`📋 Page ${currentPage + 1}: received ${docs.length} tenders`);
+    docs.forEach((d) =>
+      console.log(`   • ${d.b_bid_number?.[0] || "Unknown"} (${d.id}) — Date: ${getDateString(d.final_start_date_sort?.[0])}`)
+    );
+
     docs.forEach((doc: Record<string, any>) => {
-      if (!fetchedTenderIDs.has(doc.id)) {
-        allTenders.push(doc);
-        fetchedTenderIDs.add(doc.id);
+      const tenderDateStr = getDateString(doc.final_start_date_sort?.[0]);
+      if (!fetchedTenderIDs.has(doc.id) && tenderDateStr === targetDate) {
+        if (
+          Array.isArray(doc.b_cat_id) &&
+          typeof doc.b_cat_id[0] === "string" &&
+          !doc.b_cat_id[0].toLowerCase().startsWith("services_")
+        ) {
+          allTenders.push(doc);
+          fetchedTenderIDs.add(doc.id);
+        }
       }
     });
 
-    await new Promise(res => setTimeout(res, 400));  // slightly longer delay between pages
+    await new Promise(res => setTimeout(res, 400));
     currentPage++;
     if (fetchedTenderIDs.size >= totalToFetch || docs.length === 0) break;
   }
 
   await browser.close();
-
-  return Array.from(
-    new Map(
-      allTenders.filter((t) => {
-        if (!Array.isArray(t.b_cat_id)) return false;
-        const catId = t.b_cat_id[0];
-        if (typeof catId !== "string") return false;
-        if (catId.toLowerCase().startsWith("services_")) return false;
-        const tenderDateStr = getDateString(t.final_start_date_sort?.[0]);
-        return tenderDateStr === todayDateStr;
-      }).map(t => [t.id, t])
-    ).values()
-  );
+  console.log(`🎯 Filtered tenders matching ${targetDate}: ${allTenders.length}`);
+  return allTenders;
 }
 
+// Stabilization and deduplication logic (same)
 async function stabilizedTenderFetch(
+  targetDate: string,
   maxAttempts = 15,
   confirmStableRuns = 3,
   fetchDelayMs = 4000
-) {
+): Promise<Record<string, any>[]> {
   let globalTenderIDs = new Set<string>();
   let globalTenderMap = new Map<string, any>();
   let stableStreak = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`\n🔎 Tender fetch attempt ${attempt}`);
-    const tenderList = await fetchGemTenderData_Internal();
+    const tenderList = await fetchGemTenderData_Internal(targetDate);
     let newFound = false;
     for (const tender of tenderList) {
       if (!globalTenderIDs.has(tender.id)) {
         globalTenderIDs.add(tender.id);
         globalTenderMap.set(tender.id, tender);
         newFound = true;
-        console.log(`🆕 New tender found: ${tender.id}`);
       }
     }
-    if (newFound) {
-      stableStreak = 0;
-    } else {
+    if (newFound) stableStreak = 0;
+    else {
       stableStreak++;
       console.log(`✅ Stable streak increased: ${stableStreak}/${confirmStableRuns}`);
-      if (stableStreak >= confirmStableRuns) {
-        break;
-      }
+      if (stableStreak >= confirmStableRuns) break;
     }
     await new Promise(res => setTimeout(res, fetchDelayMs));
   }
@@ -186,23 +186,23 @@ async function stabilizedTenderFetch(
   return Array.from(globalTenderMap.values());
 }
 
-async function fetchGemTenderData() {
+// Main entry
+async function fetchGemTenderData(targetDate?: string) {
   await connectDB();
-  const todayDateStr = new Date().toISOString().substring(0, 10);
+  const dateToFetch = targetDate || new Date().toISOString().substring(0, 10);
+  console.log(`📅 Fetching tenders for date: ${dateToFetch}`);
 
-  const finalTenders = await stabilizedTenderFetch();
+  const finalTenders = await stabilizedTenderFetch(dateToFetch);
 
   const tenderIds = finalTenders.map(t => t.id);
-  logTenderIds(tenderIds, todayDateStr);
+  logTenderIds(tenderIds, dateToFetch);
 
   for (const tender of finalTenders) {
     const tenderId = tender.id;
     const bidNumber = tender.b_bid_number[0];
-    if (await isTenderAlreadySaved(bidNumber, tenderId)) {
-      console.log(`⏩ Skipping already saved/downloaded: ${bidNumber} (${tenderId})`);
-      continue;
-    }
-    console.log(`\n📥 Processing Product Tender: ${bidNumber} (ID: ${tenderId})`);
+    if (await isTenderAlreadySaved(bidNumber, tenderId)) continue;
+
+    console.log(`📥 Processing Product Tender: ${bidNumber} (${tenderId})`);
     const result = await downloadPDF(tenderId, bidNumber);
     if (result) {
       const { extractedText, extractedFields } = result;
@@ -222,6 +222,8 @@ async function fetchGemTenderData() {
   console.log("\n🎉 All PDFs processed!");
 }
 
-fetchGemTenderData().catch(error => console.error("❌ Error scraping GeM tenders:", error));
+fetchGemTenderData().catch(error =>
+  console.error("❌ Error scraping GeM tenders:", error)
+);
 
 export { fetchGemTenderData };
