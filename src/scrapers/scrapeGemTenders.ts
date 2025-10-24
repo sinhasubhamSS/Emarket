@@ -77,7 +77,7 @@ async function fetchGemTenderData_Internal(): Promise<Record<string, any>[]> {
     const payloadObj = {
       searchType: "con",
       state_name_con: "JHARKHAND",
-      city_name_con: "Ranchi",
+      city_name_con: "",
       bidEndFromCon: "",
       bidEndToCon: "",
       page: currentPage + 1,
