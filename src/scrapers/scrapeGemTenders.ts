@@ -219,7 +219,6 @@ async function fetchGemTenderData(targetDate?: string) {
     }
   }
 
-  console.log("\n🎉 All PDFs processed!");
 }
 
 fetchGemTenderData().catch(error =>
